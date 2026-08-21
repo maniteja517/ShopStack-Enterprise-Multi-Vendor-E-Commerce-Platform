@@ -1,0 +1,36 @@
+spring:
+  application:
+    name: shopstack-backend
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/shopstack
+    username: postgres
+    password: Nikitha@19
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+
+    show-sql: true
+
+    properties:
+      hibernate:
+        format_sql: true
+
+server:
+  port: 8080
+
+logging:
+  level:
+    org.springframework.security: DEBUG
+
+
+# ==========================================
+# RAZORPAY
+# ==========================================
+
+razorpay:
+  key:
+    id: YOUR_RAZORPAY_TEST_KEY_ID
+    secret: YOUR_RAZORPAY_TEST_KEY_SECRET
