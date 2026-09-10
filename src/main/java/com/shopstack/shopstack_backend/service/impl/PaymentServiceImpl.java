@@ -16,6 +16,8 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+
 @Service
 public class PaymentServiceImpl implements PaymentService {
 
@@ -33,89 +35,102 @@ public class PaymentServiceImpl implements PaymentService {
         this.userRepository = userRepository;
     }
 
-    // =========================
+    // =========================================================
     // CREATE PAYMENT
-    // =========================
+    // =========================================================
 
     @Override
     @Transactional
-    public PaymentResponse createPayment(
-            PaymentRequest request) {
+    public PaymentResponse createPayment(PaymentRequest request) {
 
         User user = getAuthenticatedUser();
 
-        Order order = orderRepository
-                .findById(request.getOrderId())
+        Order order = orderRepository.findById(request.getOrderId())
                 .orElseThrow(() ->
-                        new RuntimeException(
-                                "Order not found"
-                        ));
+                        new RuntimeException("Order not found"));
 
-        // Make sure the order belongs
-        // to the logged-in customer.
+        // Check order ownership
         if (!order.getCustomerEmail()
-                .equals(user.getEmail())) {
+                .equalsIgnoreCase(user.getEmail())) {
 
             throw new RuntimeException(
-                    "You are not allowed to make payment for this order"
-            );
+                    "You are not allowed to make payment for this order");
         }
 
-        // Cancelled orders cannot be paid.
-        if (order.getStatus() ==
-                OrderStatus.CANCELLED) {
+        // Only placed orders can be paid
+        if (order.getStatus() != OrderStatus.PLACED) {
 
             throw new RuntimeException(
-                    "Payment cannot be created for a cancelled order"
-            );
+                    "Payment can only be created for a placed order");
         }
 
-        // Prevent duplicate payment.
-        if (paymentRepository
-                .findByOrderId(order.getId())
-                .isPresent()) {
+        if (request.getGateway() == null ||
+                request.getGateway().isBlank()) {
 
             throw new RuntimeException(
-                    "Payment already exists for this order"
-            );
+                    "Payment gateway is required");
         }
 
         String gateway =
-                request.getGateway();
+                request.getGateway().trim().toUpperCase();
 
-        if (gateway == null ||
-                gateway.isBlank()) {
+        // =====================================================
+        // MOCK PAYMENT
+        // =====================================================
+
+        if (!gateway.equals("MOCK")) {
 
             throw new RuntimeException(
-                    "Payment gateway is required"
-            );
+                    "Only MOCK payment gateway is enabled");
         }
 
+        // Check existing payment
+        Payment existingPayment =
+                paymentRepository
+                        .findByOrderId(order.getId())
+                        .orElse(null);
+
+        if (existingPayment != null) {
+
+            if (existingPayment.getStatus()
+                    == PaymentStatus.SUCCESS) {
+
+                throw new RuntimeException(
+                        "Payment already completed for this order");
+            }
+
+            if (existingPayment.getStatus()
+                    == PaymentStatus.PENDING) {
+
+                return mapToResponse(existingPayment);
+            }
+
+            // FAILED payment can be retried
+            paymentRepository.delete(existingPayment);
+            paymentRepository.flush();
+        }
+
+        // Create payment
         Payment payment = new Payment();
 
-        payment.setOrderId(
-                order.getId()
-        );
+        payment.setOrderId(order.getId());
 
-        /*
-         * Amount comes directly
-         * from the order.
-         */
         payment.setAmount(
-                java.math.BigDecimal.valueOf(
-                        order.getTotalAmount()
-                )
-        );
+                BigDecimal.valueOf(
+                        order.getTotalAmount()));
 
         payment.setCurrency("INR");
 
         payment.setStatus(
-                PaymentStatus.PENDING
-        );
+                PaymentStatus.PENDING);
 
-        payment.setGateway(
-                gateway.toUpperCase()
-        );
+        payment.setGateway("MOCK");
+
+        /*
+         * Simulates the payment gateway's order ID.
+         */
+        payment.setGatewayOrderId(
+                "MOCK_ORDER_" + order.getId());
 
         Payment savedPayment =
                 paymentRepository.save(payment);
@@ -123,47 +138,195 @@ public class PaymentServiceImpl implements PaymentService {
         return mapToResponse(savedPayment);
     }
 
-    // =========================
-    // GET PAYMENT BY ORDER ID
-    // =========================
+    // =========================================================
+    // GET PAYMENT BY ORDER
+    // =========================================================
 
     @Override
     @Transactional(readOnly = true)
-    public PaymentResponse getPaymentByOrderId(
-            Long orderId) {
+    public PaymentResponse getPaymentByOrderId(Long orderId) {
 
         User user = getAuthenticatedUser();
 
-        Order order = orderRepository
-                .findById(orderId)
+        Order order = orderRepository.findById(orderId)
                 .orElseThrow(() ->
-                        new RuntimeException(
-                                "Order not found"
-                        ));
+                        new RuntimeException("Order not found"));
 
-        // Customer can only see
-        // their own payment.
         if (!order.getCustomerEmail()
-                .equals(user.getEmail())) {
+                .equalsIgnoreCase(user.getEmail())) {
 
             throw new RuntimeException(
-                    "You are not allowed to access this payment"
-            );
+                    "You are not allowed to access this payment");
         }
 
-        Payment payment = paymentRepository
-                .findByOrderId(orderId)
-                .orElseThrow(() ->
-                        new RuntimeException(
-                                "Payment not found for this order"
-                        ));
+        Payment payment =
+                paymentRepository
+                        .findByOrderId(orderId)
+                        .orElseThrow(() ->
+                                new RuntimeException(
+                                        "Payment not found for this order"));
 
         return mapToResponse(payment);
     }
 
-    // =========================
-    // UPDATE PAYMENT STATUS
-    // =========================
+    // =========================================================
+    // VERIFY MOCK PAYMENT
+    // =========================================================
+
+    @Override
+    @Transactional(
+            noRollbackFor = PaymentVerificationFailedException.class
+    )
+    public PaymentResponse verifyPayment(
+            Long paymentId,
+            String paymentOrderId,
+            String paymentReference,
+            String signature) {
+
+        User user = getAuthenticatedUser();
+
+        Payment payment =
+                paymentRepository.findById(paymentId)
+                        .orElseThrow(() ->
+                                new RuntimeException(
+                                        "Payment not found"));
+
+        Order order =
+                orderRepository.findById(
+                        payment.getOrderId()
+                ).orElseThrow(() ->
+                        new RuntimeException(
+                                "Order not found"));
+
+        // Security check
+        if (!order.getCustomerEmail()
+                .equalsIgnoreCase(user.getEmail())) {
+
+            throw new RuntimeException(
+                    "You are not allowed to verify this payment");
+        }
+
+        // Already successful
+        if (payment.getStatus()
+                == PaymentStatus.SUCCESS) {
+
+            return mapToResponse(payment);
+        }
+
+        // =====================================================
+        // REQUIRED VALIDATION
+        // =====================================================
+
+        if (paymentOrderId == null ||
+                paymentOrderId.isBlank()) {
+
+            failPayment(
+                    payment,
+                    "Payment order ID is required");
+        }
+
+        if (paymentReference == null ||
+                paymentReference.isBlank()) {
+
+            failPayment(
+                    payment,
+                    "Payment reference is required");
+        }
+
+        if (signature == null ||
+                signature.isBlank()) {
+
+            failPayment(
+                    payment,
+                    "Payment signature is required");
+        }
+
+        // =====================================================
+        // MOCK VALIDATION
+        // =====================================================
+
+        String expectedOrderId =
+                payment.getGatewayOrderId();
+
+        String expectedPaymentId =
+                "MOCK_PAYMENT_" + payment.getId();
+
+        String expectedSignature =
+                "MOCK_SIGNATURE_" + payment.getId();
+
+        // Validate payment order ID
+        if (!expectedOrderId.equals(paymentOrderId)) {
+
+            failPayment(
+                    payment,
+                    "Invalid payment order ID");
+        }
+
+        // Validate payment reference
+        if (!expectedPaymentId.equals(paymentReference)) {
+
+            failPayment(
+                    payment,
+                    "Invalid payment reference");
+        }
+
+        // Validate signature
+        if (!expectedSignature.equals(signature)) {
+
+            failPayment(
+                    payment,
+                    "Payment verification failed");
+        }
+
+        // =====================================================
+        // PAYMENT SUCCESS
+        // =====================================================
+
+        payment.setGatewayPaymentId(
+                paymentReference);
+
+        payment.setGatewaySignature(
+                signature);
+
+        payment.setStatus(
+                PaymentStatus.SUCCESS);
+
+        Payment savedPayment =
+                paymentRepository.save(payment);
+
+        // =====================================================
+        // CONFIRM ORDER
+        // =====================================================
+
+        if (order.getStatus() == OrderStatus.PLACED) {
+
+            order.setStatus(
+                    OrderStatus.CONFIRMED);
+
+            orderRepository.save(order);
+        }
+
+        return mapToResponse(savedPayment);
+    }
+
+    // =========================================================
+    // MARK PAYMENT AS FAILED
+    // =========================================================
+
+    private void failPayment(
+            Payment payment,
+            String message) {
+
+        payment.setStatus(PaymentStatus.FAILED);
+
+        paymentRepository.saveAndFlush(payment);
+
+        throw new PaymentVerificationFailedException(message);
+    }
+
+    // =========================================================
+    // ADMIN PAYMENT STATUS
+    // =========================================================
 
     @Override
     @Transactional
@@ -171,19 +334,17 @@ public class PaymentServiceImpl implements PaymentService {
             Long paymentId,
             String status) {
 
-        Payment payment = paymentRepository
-                .findById(paymentId)
-                .orElseThrow(() ->
-                        new RuntimeException(
-                                "Payment not found"
-                        ));
+        Payment payment =
+                paymentRepository.findById(paymentId)
+                        .orElseThrow(() ->
+                                new RuntimeException(
+                                        "Payment not found"));
 
         if (status == null ||
                 status.isBlank()) {
 
             throw new RuntimeException(
-                    "Payment status is required"
-            );
+                    "Payment status is required");
         }
 
         PaymentStatus newStatus;
@@ -192,93 +353,54 @@ public class PaymentServiceImpl implements PaymentService {
 
             newStatus =
                     PaymentStatus.valueOf(
-                            status.toUpperCase()
-                    );
+                            status.toUpperCase());
 
         } catch (IllegalArgumentException exception) {
 
             throw new RuntimeException(
-                    "Invalid payment status: "
-                            + status
-            );
+                    "Invalid payment status: " + status);
         }
 
-        // Refunded payment cannot be changed.
-        if (payment.getStatus() ==
-                PaymentStatus.REFUNDED) {
+        // SUCCESS must come through verification
+        if (newStatus == PaymentStatus.SUCCESS) {
 
             throw new RuntimeException(
-                    "Refunded payment cannot be updated"
-            );
+                    "Payment SUCCESS can only be set after payment verification");
         }
 
-        Order order = orderRepository
-                .findById(payment.getOrderId())
-                .orElseThrow(() ->
+        // Refunded payment cannot be changed
+        if (payment.getStatus()
+                == PaymentStatus.REFUNDED) {
+
+            throw new RuntimeException(
+                    "Refunded payment cannot be updated");
+        }
+
+        Order order =
+                orderRepository.findById(
+                        payment.getOrderId()
+                ).orElseThrow(() ->
                         new RuntimeException(
-                                "Order not found for payment"
-                        ));
+                                "Order not found for payment"));
 
-        // =========================
-        // PAYMENT SUCCESS
-        // =========================
+        // =====================================================
+        // REFUND
+        // =====================================================
 
-        if (newStatus ==
-                PaymentStatus.SUCCESS) {
+        if (newStatus == PaymentStatus.REFUNDED) {
 
-            /*
-             * Payment SUCCESS
-             *        ↓
-             * Order CONFIRMED
-             */
-
-            if (order.getStatus() ==
-                    OrderStatus.PLACED) {
-
-                order.setStatus(
-                        OrderStatus.CONFIRMED
-                );
-
-                orderRepository.save(order);
-            }
-        }
-
-        // =========================
-        // PAYMENT REFUNDED
-        // =========================
-
-        else if (newStatus ==
-                PaymentStatus.REFUNDED) {
-
-            /*
-             * Refund is allowed only
-             * after the order has been
-             * returned.
-             *
-             * RETURNED
-             *    ↓
-             * REFUNDED
-             */
-
-            if (order.getStatus() !=
-                    OrderStatus.RETURNED) {
+            if (order.getStatus()
+                    != OrderStatus.RETURNED) {
 
                 throw new RuntimeException(
-                        "Payment can only be refunded "
-                                + "after the order is returned"
-                );
+                        "Payment can only be refunded after the order is returned");
             }
 
             order.setStatus(
-                    OrderStatus.REFUNDED
-            );
+                    OrderStatus.REFUNDED);
 
             orderRepository.save(order);
         }
-
-        // =========================
-        // OTHER PAYMENT STATUSES
-        // =========================
 
         payment.setStatus(newStatus);
 
@@ -288,9 +410,9 @@ public class PaymentServiceImpl implements PaymentService {
         return mapToResponse(updatedPayment);
     }
 
-    // =========================
-    // GET AUTHENTICATED USER
-    // =========================
+    // =========================================================
+    // AUTHENTICATED USER
+    // =========================================================
 
     private User getAuthenticatedUser() {
 
@@ -304,24 +426,21 @@ public class PaymentServiceImpl implements PaymentService {
                 authentication.getName() == null) {
 
             throw new RuntimeException(
-                    "User is not authenticated"
-            );
+                    "User is not authenticated");
         }
 
         String email =
                 authentication.getName();
 
-        return userRepository
-                .findByEmail(email)
+        return userRepository.findByEmail(email)
                 .orElseThrow(() ->
                         new RuntimeException(
-                                "User not found"
-                        ));
+                                "User not found"));
     }
 
-    // =========================
-    // MAP PAYMENT TO RESPONSE
-    // =========================
+    // =========================================================
+    // RESPONSE MAPPER
+    // =========================================================
 
     private PaymentResponse mapToResponse(
             Payment payment) {
@@ -338,5 +457,19 @@ public class PaymentServiceImpl implements PaymentService {
                 payment.getCreatedAt(),
                 payment.getUpdatedAt()
         );
+    }
+
+    // =========================================================
+    // PAYMENT VERIFICATION EXCEPTION
+    // =========================================================
+
+    private static class PaymentVerificationFailedException
+            extends RuntimeException {
+
+        public PaymentVerificationFailedException(
+                String message) {
+
+            super(message);
+        }
     }
 }

@@ -9,6 +9,13 @@ public interface PaymentService {
 
     PaymentResponse getPaymentByOrderId(Long orderId);
 
+    PaymentResponse verifyPayment(
+            Long paymentId,
+            String paymentOrderId,
+            String paymentReference,
+            String signature
+    );
+
     PaymentResponse updatePaymentStatus(
             Long paymentId,
             String status

@@ -6,16 +6,20 @@ import com.shopstack.shopstack_backend.dto.response.OrderItemResponse;
 import com.shopstack.shopstack_backend.dto.response.OrderResponse;
 import com.shopstack.shopstack_backend.entity.Cart;
 import com.shopstack.shopstack_backend.entity.CartItem;
+import com.shopstack.shopstack_backend.entity.Coupon;
 import com.shopstack.shopstack_backend.entity.InventoryHistory;
 import com.shopstack.shopstack_backend.entity.Order;
 import com.shopstack.shopstack_backend.entity.OrderItem;
 import com.shopstack.shopstack_backend.entity.Product;
 import com.shopstack.shopstack_backend.entity.User;
+import com.shopstack.shopstack_backend.entity.Warehouse;
 import com.shopstack.shopstack_backend.repository.CartRepository;
+import com.shopstack.shopstack_backend.repository.CouponRepository;
 import com.shopstack.shopstack_backend.repository.InventoryHistoryRepository;
 import com.shopstack.shopstack_backend.repository.OrderRepository;
 import com.shopstack.shopstack_backend.repository.ProductRepository;
 import com.shopstack.shopstack_backend.repository.UserRepository;
+import com.shopstack.shopstack_backend.repository.WarehouseRepository;
 import com.shopstack.shopstack_backend.service.OrderService;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -23,6 +27,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Service
@@ -33,13 +38,17 @@ public class OrderServiceImpl implements OrderService {
     private final CartRepository cartRepository;
     private final UserRepository userRepository;
     private final InventoryHistoryRepository inventoryHistoryRepository;
+    private final CouponRepository couponRepository;
+    private final WarehouseRepository warehouseRepository;
 
     public OrderServiceImpl(
             OrderRepository orderRepository,
             ProductRepository productRepository,
             CartRepository cartRepository,
             UserRepository userRepository,
-            InventoryHistoryRepository inventoryHistoryRepository) {
+            InventoryHistoryRepository inventoryHistoryRepository,
+            CouponRepository couponRepository,
+            WarehouseRepository warehouseRepository) {
 
         this.orderRepository = orderRepository;
         this.productRepository = productRepository;
@@ -47,6 +56,8 @@ public class OrderServiceImpl implements OrderService {
         this.userRepository = userRepository;
         this.inventoryHistoryRepository =
                 inventoryHistoryRepository;
+        this.couponRepository = couponRepository;
+        this.warehouseRepository = warehouseRepository;
     }
 
     // =========================
@@ -74,7 +85,10 @@ public class OrderServiceImpl implements OrderService {
             );
         }
 
-        // Check stock before creating order
+        // =========================
+        // CHECK STOCK
+        // =========================
+
         for (CartItem cartItem : cart.getItems()) {
 
             Product product = productRepository
@@ -124,7 +138,10 @@ public class OrderServiceImpl implements OrderService {
             }
         }
 
-        // Create order
+        // =========================
+        // CREATE ORDER
+        // =========================
+
         Order order = new Order();
 
         order.setCustomerEmail(user.getEmail());
@@ -138,7 +155,10 @@ public class OrderServiceImpl implements OrderService {
 
         double totalAmount = 0.0;
 
-        // Create order items
+        // =========================
+        // CREATE ORDER ITEMS
+        // =========================
+
         for (CartItem cartItem : cart.getItems()) {
 
             Product product = productRepository
@@ -197,13 +217,113 @@ public class OrderServiceImpl implements OrderService {
                     subtotal.doubleValue();
         }
 
+        // =========================
+        // APPLY COUPON
+        // =========================
+
+        String couponCode = request.getCouponCode();
+
+        if (couponCode != null &&
+                !couponCode.trim().isEmpty()) {
+
+            Coupon coupon =
+                    couponRepository.findByCode(
+                                    couponCode.trim().toUpperCase()
+                            )
+                            .orElseThrow(() ->
+                                    new RuntimeException(
+                                            "Invalid coupon code"
+                                    ));
+
+            LocalDateTime now =
+                    LocalDateTime.now();
+
+            // Check whether coupon is active
+            if (!coupon.isActive()) {
+
+                throw new RuntimeException(
+                        "Coupon is inactive"
+                );
+            }
+
+            // Check start date
+            if (now.isBefore(
+                    coupon.getStartDate())) {
+
+                throw new RuntimeException(
+                        "Coupon is not active yet"
+                );
+            }
+
+            // Check expiry date
+            if (now.isAfter(
+                    coupon.getExpiryDate())) {
+
+                throw new RuntimeException(
+                        "Coupon has expired"
+                );
+            }
+
+            // Check minimum order amount
+            if (totalAmount <
+                    coupon.getMinimumOrderAmount()) {
+
+                throw new RuntimeException(
+                        "Minimum order amount for coupon is ₹"
+                                + coupon.getMinimumOrderAmount()
+                );
+            }
+
+            // Check usage limit
+            if (coupon.getUsedCount() >=
+                    coupon.getUsageLimit()) {
+
+                throw new RuntimeException(
+                        "Coupon usage limit reached"
+                );
+            }
+
+            // Calculate discount
+            double discountAmount =
+                    totalAmount *
+                            coupon.getDiscountPercentage()
+                            / 100.0;
+
+            // Calculate final amount
+            totalAmount =
+                    totalAmount -
+                            discountAmount;
+
+            // Prevent negative total
+            if (totalAmount < 0) {
+                totalAmount = 0;
+            }
+
+            // Increase coupon usage
+            coupon.setUsedCount(
+                    coupon.getUsedCount() + 1
+            );
+
+            couponRepository.save(coupon);
+        }
+
+        // =========================
+        // SET FINAL ORDER AMOUNT
+        // =========================
+
         order.setTotalAmount(totalAmount);
 
-        // Save order first
+        // =========================
+        // SAVE ORDER
+        // =========================
+
         Order savedOrder =
                 orderRepository.save(order);
 
-        // Reduce stock and create inventory history
+        // =========================
+        // REDUCE STOCK
+        // =========================
+
         for (CartItem cartItem : cart.getItems()) {
 
             Product product = productRepository
@@ -227,6 +347,10 @@ public class OrderServiceImpl implements OrderService {
             product.setStockQuantity(newStock);
 
             productRepository.save(product);
+
+            // =========================
+            // INVENTORY HISTORY
+            // =========================
 
             InventoryHistory history =
                     new InventoryHistory();
@@ -264,7 +388,10 @@ public class OrderServiceImpl implements OrderService {
             );
         }
 
-        // Clear cart
+        // =========================
+        // CLEAR CART
+        // =========================
+
         cart.getItems().clear();
 
         cartRepository.save(cart);
@@ -353,7 +480,10 @@ public class OrderServiceImpl implements OrderService {
             );
         }
 
-        // Restore stock
+        // =========================
+        // RESTORE STOCK
+        // =========================
+
         for (OrderItem item : order.getItems()) {
 
             Product product = productRepository
@@ -460,7 +590,10 @@ public class OrderServiceImpl implements OrderService {
             );
         }
 
-        // Restore stock
+        // =========================
+        // RESTORE STOCK
+        // =========================
+
         for (OrderItem item : order.getItems()) {
 
             Product product = productRepository
@@ -487,7 +620,10 @@ public class OrderServiceImpl implements OrderService {
 
             productRepository.save(product);
 
-            // Inventory history
+            // =========================
+            // INVENTORY HISTORY
+            // =========================
+
             InventoryHistory history =
                     new InventoryHistory();
 
@@ -524,7 +660,10 @@ public class OrderServiceImpl implements OrderService {
             );
         }
 
-        // Change order status
+        // =========================
+        // CHANGE ORDER STATUS
+        // =========================
+
         order.setStatus(
                 OrderStatus.RETURNED
         );
@@ -616,6 +755,57 @@ public class OrderServiceImpl implements OrderService {
                 orderRepository.save(order);
 
         return mapToResponse(updatedOrder);
+    }
+
+    // =========================
+    // ALLOCATE WAREHOUSE
+    // =========================
+
+    @Override
+    @Transactional
+    public OrderResponse allocateWarehouse(
+            Long orderId,
+            Long warehouseId) {
+
+        Order order = orderRepository
+                .findById(orderId)
+                .orElseThrow(() ->
+                        new RuntimeException(
+                                "Order not found"
+                        ));
+
+        Warehouse warehouse = warehouseRepository
+                .findById(warehouseId)
+                .orElseThrow(() ->
+                        new RuntimeException(
+                                "Warehouse not found"
+                        ));
+
+        if (!warehouse.isActive()) {
+
+            throw new RuntimeException(
+                    "Cannot allocate an inactive warehouse"
+            );
+        }
+
+        if (order.getStatus() == OrderStatus.DELIVERED ||
+                order.getStatus() == OrderStatus.CANCELLED ||
+                order.getStatus() == OrderStatus.RETURNED ||
+                order.getStatus() == OrderStatus.REFUNDED) {
+
+            throw new RuntimeException(
+                    "Warehouse cannot be allocated for order in "
+                            + order.getStatus()
+                            + " status"
+            );
+        }
+
+        order.setWarehouse(warehouse);
+
+        Order savedOrder =
+                orderRepository.save(order);
+
+        return mapToResponse(savedOrder);
     }
 
     // =========================

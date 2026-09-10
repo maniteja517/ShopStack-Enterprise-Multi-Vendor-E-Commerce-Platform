@@ -25,9 +25,11 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
 
     // =========================
     // LOW STOCK PRODUCTS
+    // Excludes out-of-stock products
     // =========================
 
-    List<Product> findByStockQuantityLessThanEqual(
+    List<Product> findByStockQuantityGreaterThanAndStockQuantityLessThanEqual(
+            Integer minimumStock,
             Integer threshold
     );
 }

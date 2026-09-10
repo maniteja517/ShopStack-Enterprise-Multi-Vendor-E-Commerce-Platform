@@ -23,4 +23,6 @@ public class OrderRequest {
 
     @NotBlank
     private String pincode;
+
+    private String couponCode;
 }

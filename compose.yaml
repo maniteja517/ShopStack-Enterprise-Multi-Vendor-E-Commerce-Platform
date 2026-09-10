@@ -1,1 +1,71 @@
-services: {}
+services:
+
+  # ==========================================
+  # POSTGRESQL DATABASE
+  # ==========================================
+
+  db:
+    image: postgres:17
+    container_name: shopstack-postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: ${DB_NAME:-shopstack}
+      POSTGRES_USER: ${DB_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-Nikitha@19}
+
+    ports:
+      - "5433:5432"
+
+    volumes:
+      - shopstack-postgres-data:/var/lib/postgresql/data
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${DB_USERNAME:-postgres} -d ${DB_NAME:-shopstack}"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+
+  # ==========================================
+  # SHOPSTACK BACKEND
+  # ==========================================
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: shopstack-backend
+    restart: unless-stopped
+
+    depends_on:
+      db:
+        condition: service_healthy
+
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-shopstack}
+      DB_USERNAME: ${DB_USERNAME:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-Nikitha@19}
+
+      SERVER_PORT: 8080
+
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-YOUR_RAZORPAY_TEST_KEY_ID}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-YOUR_RAZORPAY_TEST_KEY_SECRET}
+
+    ports:
+      - "8081:8080"
+
+
+# ==========================================
+# PERSISTENT VOLUME
+# ==========================================
+
+volumes:
+  shopstack-postgres-data:

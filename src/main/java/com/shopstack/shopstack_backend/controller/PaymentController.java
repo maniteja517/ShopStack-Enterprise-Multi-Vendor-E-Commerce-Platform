@@ -21,9 +21,9 @@ public class PaymentController {
         this.paymentService = paymentService;
     }
 
-    // =========================
+    // =========================================================
     // CREATE PAYMENT
-    // =========================
+    // =========================================================
 
     @PreAuthorize("hasRole('CUSTOMER')")
     @PostMapping
@@ -43,9 +43,9 @@ public class PaymentController {
         );
     }
 
-    // =========================
+    // =========================================================
     // GET PAYMENT BY ORDER
-    // =========================
+    // =========================================================
 
     @PreAuthorize("hasRole('CUSTOMER')")
     @GetMapping("/order/{orderId}")
@@ -67,9 +67,39 @@ public class PaymentController {
         );
     }
 
-    // =========================
-    // UPDATE PAYMENT STATUS
-    // =========================
+    // =========================================================
+    // VERIFY PAYMENT
+    // =========================================================
+
+    @PreAuthorize("hasRole('CUSTOMER')")
+    @PostMapping("/{paymentId}/verify")
+    public ResponseEntity<ApiResponse<PaymentResponse>>
+    verifyPayment(
+            @PathVariable Long paymentId,
+            @RequestParam String paymentOrderId,
+            @RequestParam String paymentReference,
+            @RequestParam String signature) {
+
+        PaymentResponse response =
+                paymentService.verifyPayment(
+                        paymentId,
+                        paymentOrderId,
+                        paymentReference,
+                        signature
+                );
+
+        return ResponseEntity.ok(
+                new ApiResponse<>(
+                        true,
+                        "Payment Verified Successfully",
+                        response
+                )
+        );
+    }
+
+    // =========================================================
+    // ADMIN PAYMENT STATUS
+    // =========================================================
 
     @PreAuthorize("hasRole('ADMIN')")
     @PutMapping("/{paymentId}/status")

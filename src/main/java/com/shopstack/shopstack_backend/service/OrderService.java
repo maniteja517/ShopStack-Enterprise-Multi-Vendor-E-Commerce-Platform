@@ -26,4 +26,13 @@ public interface OrderService {
             Long id,
             OrderStatus newStatus
     );
+
+    // =========================
+    // WAREHOUSE ALLOCATION
+    // =========================
+
+    OrderResponse allocateWarehouse(
+            Long orderId,
+            Long warehouseId
+    );
 }

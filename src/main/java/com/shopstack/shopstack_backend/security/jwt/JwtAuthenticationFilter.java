@@ -18,11 +18,11 @@ import java.io.IOException;
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
-    private final JwtService jwtService;
+    private final com.shopstack.shopstack_backend.security.jwt.JwtService jwtService;
     private final CustomUserDetailsService customUserDetailsService;
 
     public JwtAuthenticationFilter(
-            JwtService jwtService,
+            com.shopstack.shopstack_backend.security.jwt.JwtService jwtService,
             CustomUserDetailsService customUserDetailsService) {
 
         this.jwtService = jwtService;

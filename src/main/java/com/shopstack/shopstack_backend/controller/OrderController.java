@@ -165,4 +165,33 @@ public class OrderController {
                 )
         );
     }
+
+    // =========================
+    // ALLOCATE WAREHOUSE
+    // =========================
+
+    @PreAuthorize("hasRole('ADMIN')")
+    @PutMapping("/{orderId}/warehouse/{warehouseId}")
+    public ResponseEntity<ApiResponse<OrderResponse>> allocateWarehouse(
+            @PathVariable Long orderId,
+            @PathVariable Long warehouseId) {
+
+        System.out.println(
+                "===== ALLOCATE WAREHOUSE API HIT ====="
+        );
+
+        OrderResponse response =
+                orderService.allocateWarehouse(
+                        orderId,
+                        warehouseId
+                );
+
+        return ResponseEntity.ok(
+                new ApiResponse<>(
+                        true,
+                        "Warehouse Allocated Successfully",
+                        response
+                )
+        );
+    }
 }

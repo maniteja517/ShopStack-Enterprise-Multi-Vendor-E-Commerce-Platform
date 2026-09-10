@@ -3,9 +3,9 @@ spring:
     name: shopstack-backend
 
   datasource:
-    url: jdbc:postgresql://localhost:5432/shopstack
-    username: postgres
-    password: Nikitha@19
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:shopstack}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:Nikitha@19}
     driver-class-name: org.postgresql.Driver
 
   jpa:
@@ -19,12 +19,11 @@ spring:
         format_sql: true
 
 server:
-  port: 8080
+  port: ${SERVER_PORT:8080}
 
 logging:
   level:
     org.springframework.security: DEBUG
-
 
 # ==========================================
 # RAZORPAY
@@ -32,5 +31,5 @@ logging:
 
 razorpay:
   key:
-    id: YOUR_RAZORPAY_TEST_KEY_ID
-    secret: YOUR_RAZORPAY_TEST_KEY_SECRET
+    id: ${RAZORPAY_KEY_ID:YOUR_RAZORPAY_TEST_KEY_ID}
+    secret: ${RAZORPAY_KEY_SECRET:YOUR_RAZORPAY_TEST_KEY_SECRET}

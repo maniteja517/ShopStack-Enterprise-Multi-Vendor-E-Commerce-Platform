@@ -38,8 +38,7 @@ public class ProductServiceImpl implements ProductService {
         this.productRepository = productRepository;
         this.categoryRepository = categoryRepository;
         this.vendorRepository = vendorRepository;
-        this.inventoryHistoryRepository =
-                inventoryHistoryRepository;
+        this.inventoryHistoryRepository = inventoryHistoryRepository;
     }
 
     // =========================
@@ -149,6 +148,7 @@ public class ProductServiceImpl implements ProductService {
 
         product.setActive(true);
 
+        // Newly created products require admin approval
         product.setStatus(
                 ProductStatus.PENDING
         );
@@ -215,6 +215,16 @@ public class ProductServiceImpl implements ProductService {
                                 "Product not found"
                         ));
 
+        /*
+         * Customers should only see approved products.
+         * Pending and rejected products are hidden.
+         */
+        if (!isAvailableForCustomer(product)) {
+            throw new RuntimeException(
+                    "Product is not available"
+            );
+        }
+
         return mapToResponse(product);
     }
 
@@ -227,6 +237,7 @@ public class ProductServiceImpl implements ProductService {
 
         return productRepository.findAll()
                 .stream()
+                .filter(this::isAvailableForCustomer)
                 .map(this::mapToResponse)
                 .collect(Collectors.toList());
     }
@@ -244,6 +255,7 @@ public class ProductServiceImpl implements ProductService {
                         keyword
                 )
                 .stream()
+                .filter(this::isAvailableForCustomer)
                 .map(this::mapToResponse)
                 .collect(Collectors.toList());
     }
@@ -266,6 +278,7 @@ public class ProductServiceImpl implements ProductService {
         return productRepository
                 .findByCategory(category)
                 .stream()
+                .filter(this::isAvailableForCustomer)
                 .map(this::mapToResponse)
                 .collect(Collectors.toList());
     }
@@ -288,6 +301,7 @@ public class ProductServiceImpl implements ProductService {
         return productRepository
                 .findByVendor(vendor)
                 .stream()
+                .filter(this::isAvailableForCustomer)
                 .map(this::mapToResponse)
                 .collect(Collectors.toList());
     }
@@ -307,6 +321,7 @@ public class ProductServiceImpl implements ProductService {
                         maxPrice
                 )
                 .stream()
+                .filter(this::isAvailableForCustomer)
                 .map(this::mapToResponse)
                 .collect(Collectors.toList());
     }
@@ -480,7 +495,8 @@ public class ProductServiceImpl implements ProductService {
         }
 
         return productRepository
-                .findByStockQuantityLessThanEqual(
+                .findByStockQuantityGreaterThanAndStockQuantityLessThanEqual(
+                        0,
                         threshold
                 )
                 .stream()
@@ -554,6 +570,17 @@ public class ProductServiceImpl implements ProductService {
                 lowStockProducts,
                 outOfStockProducts
         );
+    }
+
+    // =========================
+    // CUSTOMER PRODUCT VISIBILITY
+    // =========================
+
+    private boolean isAvailableForCustomer(
+            Product product) {
+
+        return product.getStatus() ==
+                ProductStatus.APPROVED;
     }
 
     // =========================

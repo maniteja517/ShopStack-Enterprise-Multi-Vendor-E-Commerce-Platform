@@ -67,6 +67,66 @@ public class CommissionServiceImpl
                 continue;
             }
 
+            if (order.getItems() == null ||
+                    order.getItems().isEmpty()) {
+
+                continue;
+            }
+
+            // =====================================================
+            // CALCULATE ORIGINAL ORDER ITEM TOTAL
+            // =====================================================
+
+            BigDecimal originalOrderTotal =
+                    BigDecimal.ZERO;
+
+            for (OrderItem item : order.getItems()) {
+
+                BigDecimal itemSubtotal =
+                        BigDecimal.valueOf(
+                                item.getSubtotal()
+                        );
+
+                originalOrderTotal =
+                        originalOrderTotal.add(
+                                itemSubtotal
+                        );
+            }
+
+            if (originalOrderTotal.compareTo(
+                    BigDecimal.ZERO) <= 0) {
+
+                continue;
+            }
+
+            // =====================================================
+            // DISCOUNT RATIO
+            //
+            // Example:
+            // Original = 54000
+            // Final    = 48600
+            //
+            // Ratio = 48600 / 54000 = 0.90
+            //
+            // Each item receives the same proportional discount.
+            // =====================================================
+
+            BigDecimal finalOrderTotal =
+                    BigDecimal.valueOf(
+                            order.getTotalAmount()
+                    );
+
+            BigDecimal discountRatio =
+                    finalOrderTotal.divide(
+                            originalOrderTotal,
+                            10,
+                            java.math.RoundingMode.HALF_UP
+                    );
+
+            // =========================
+            // PROCESS ORDER ITEMS
+            // =========================
+
             for (OrderItem item :
                     order.getItems()) {
 
@@ -86,14 +146,21 @@ public class CommissionServiceImpl
                 Vendor vendor =
                         product.getVendor();
 
-                BigDecimal itemSales =
+                BigDecimal originalItemSales =
                         BigDecimal.valueOf(
                                 item.getSubtotal()
                         );
 
+                // Apply order-level coupon/discount
+                // proportionally to the item.
+                BigDecimal actualItemSales =
+                        originalItemSales.multiply(
+                                discountRatio
+                        );
+
                 vendorSales.merge(
                         vendor.getId(),
-                        itemSales,
+                        actualItemSales,
                         BigDecimal::add
                 );
             }
