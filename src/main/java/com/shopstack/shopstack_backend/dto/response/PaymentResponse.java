@@ -29,6 +29,8 @@ public class PaymentResponse {
 
     private String gatewayPaymentId;
 
+    private String razorpayKeyId;
+
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;

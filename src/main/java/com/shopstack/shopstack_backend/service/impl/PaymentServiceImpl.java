@@ -1,5 +1,7 @@
 package com.shopstack.shopstack_backend.service.impl;
 
+import com.razorpay.RazorpayClient;
+import com.razorpay.Utils;
 import com.shopstack.shopstack_backend.constant.OrderStatus;
 import com.shopstack.shopstack_backend.constant.PaymentStatus;
 import com.shopstack.shopstack_backend.dto.request.PaymentRequest;
@@ -11,6 +13,8 @@ import com.shopstack.shopstack_backend.repository.OrderRepository;
 import com.shopstack.shopstack_backend.repository.PaymentRepository;
 import com.shopstack.shopstack_backend.repository.UserRepository;
 import com.shopstack.shopstack_backend.service.PaymentService;
+import org.json.JSONObject;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
@@ -24,6 +28,12 @@ public class PaymentServiceImpl implements PaymentService {
     private final PaymentRepository paymentRepository;
     private final OrderRepository orderRepository;
     private final UserRepository userRepository;
+
+    @Value("${razorpay.key.id}")
+    private String razorpayKeyId;
+
+    @Value("${razorpay.key.secret}")
+    private String razorpayKeySecret;
 
     public PaymentServiceImpl(
             PaymentRepository paymentRepository,
@@ -49,20 +59,31 @@ public class PaymentServiceImpl implements PaymentService {
                 .orElseThrow(() ->
                         new RuntimeException("Order not found"));
 
+        // -----------------------------------------------------
         // Check order ownership
-        if (!order.getCustomerEmail()
-                .equalsIgnoreCase(user.getEmail())) {
+        // -----------------------------------------------------
+
+        if (order.getCustomerEmail() == null ||
+                !order.getCustomerEmail()
+                        .equalsIgnoreCase(user.getEmail())) {
 
             throw new RuntimeException(
                     "You are not allowed to make payment for this order");
         }
 
+        // -----------------------------------------------------
         // Only placed orders can be paid
+        // -----------------------------------------------------
+
         if (order.getStatus() != OrderStatus.PLACED) {
 
             throw new RuntimeException(
                     "Payment can only be created for a placed order");
         }
+
+        // -----------------------------------------------------
+        // Validate gateway
+        // -----------------------------------------------------
 
         if (request.getGateway() == null ||
                 request.getGateway().isBlank()) {
@@ -74,17 +95,16 @@ public class PaymentServiceImpl implements PaymentService {
         String gateway =
                 request.getGateway().trim().toUpperCase();
 
-        // =====================================================
-        // MOCK PAYMENT
-        // =====================================================
-
-        if (!gateway.equals("MOCK")) {
+        if (!gateway.equals("RAZORPAY")) {
 
             throw new RuntimeException(
-                    "Only MOCK payment gateway is enabled");
+                    "Only RAZORPAY payment gateway is enabled");
         }
 
+        // -----------------------------------------------------
         // Check existing payment
+        // -----------------------------------------------------
+
         Payment existingPayment =
                 paymentRepository
                         .findByOrderId(order.getId())
@@ -110,32 +130,109 @@ public class PaymentServiceImpl implements PaymentService {
             paymentRepository.flush();
         }
 
-        // Create payment
-        Payment payment = new Payment();
+        // =====================================================
+        // CREATE RAZORPAY ORDER
+        // =====================================================
 
-        payment.setOrderId(order.getId());
+        try {
 
-        payment.setAmount(
-                BigDecimal.valueOf(
-                        order.getTotalAmount()));
+            if (razorpayKeyId == null ||
+                    razorpayKeyId.isBlank() ||
+                    razorpayKeyId.startsWith("YOUR_")) {
 
-        payment.setCurrency("INR");
+                throw new RuntimeException(
+                        "Razorpay Key ID is not configured");
+            }
 
-        payment.setStatus(
-                PaymentStatus.PENDING);
+            if (razorpayKeySecret == null ||
+                    razorpayKeySecret.isBlank() ||
+                    razorpayKeySecret.startsWith("YOUR_")) {
 
-        payment.setGateway("MOCK");
+                throw new RuntimeException(
+                        "Razorpay Key Secret is not configured");
+            }
 
-        /*
-         * Simulates the payment gateway's order ID.
-         */
-        payment.setGatewayOrderId(
-                "MOCK_ORDER_" + order.getId());
+            RazorpayClient razorpayClient =
+                    new RazorpayClient(
+                            razorpayKeyId,
+                            razorpayKeySecret);
 
-        Payment savedPayment =
-                paymentRepository.save(payment);
+            // Razorpay expects amount in paise.
+            // ₹1 = 100 paise.
 
-        return mapToResponse(savedPayment);
+            long amountInPaise =
+                    Math.round(order.getTotalAmount() * 100);
+
+            if (amountInPaise <= 0) {
+
+                throw new RuntimeException(
+                        "Order amount must be greater than zero");
+            }
+
+            JSONObject orderRequest =
+                    new JSONObject();
+
+            orderRequest.put(
+                    "amount",
+                    amountInPaise);
+
+            orderRequest.put(
+                    "currency",
+                    "INR");
+
+            orderRequest.put(
+                    "receipt",
+                    "shopstack_order_" + order.getId());
+
+            com.razorpay.Order razorpayOrder =
+                    razorpayClient.orders.create(
+                            orderRequest);
+
+            String razorpayOrderId =
+                    razorpayOrder.get("id");
+
+            if (razorpayOrderId == null ||
+                    razorpayOrderId.isBlank()) {
+
+                throw new RuntimeException(
+                        "Razorpay did not return an order ID");
+            }
+
+            // =================================================
+            // SAVE PAYMENT
+            // =================================================
+
+            Payment payment = new Payment();
+
+            payment.setOrderId(
+                    order.getId());
+
+            payment.setAmount(
+                    BigDecimal.valueOf(
+                            order.getTotalAmount()));
+
+            payment.setCurrency("INR");
+
+            payment.setStatus(
+                    PaymentStatus.PENDING);
+
+            payment.setGateway("RAZORPAY");
+
+            payment.setGatewayOrderId(
+                    razorpayOrderId);
+
+            Payment savedPayment =
+                    paymentRepository.save(payment);
+
+            return mapToResponse(savedPayment);
+
+        } catch (Exception exception) {
+
+            throw new RuntimeException(
+                    "Failed to create Razorpay payment order: "
+                            + exception.getMessage(),
+                    exception);
+        }
     }
 
     // =========================================================
@@ -144,16 +241,19 @@ public class PaymentServiceImpl implements PaymentService {
 
     @Override
     @Transactional(readOnly = true)
-    public PaymentResponse getPaymentByOrderId(Long orderId) {
+    public PaymentResponse getPaymentByOrderId(
+            Long orderId) {
 
         User user = getAuthenticatedUser();
 
         Order order = orderRepository.findById(orderId)
                 .orElseThrow(() ->
-                        new RuntimeException("Order not found"));
+                        new RuntimeException(
+                                "Order not found"));
 
-        if (!order.getCustomerEmail()
-                .equalsIgnoreCase(user.getEmail())) {
+        if (order.getCustomerEmail() == null ||
+                !order.getCustomerEmail()
+                        .equalsIgnoreCase(user.getEmail())) {
 
             throw new RuntimeException(
                     "You are not allowed to access this payment");
@@ -170,13 +270,13 @@ public class PaymentServiceImpl implements PaymentService {
     }
 
     // =========================================================
-    // VERIFY MOCK PAYMENT
+    // VERIFY RAZORPAY PAYMENT
     // =========================================================
 
     @Override
     @Transactional(
-            noRollbackFor = PaymentVerificationFailedException.class
-    )
+            noRollbackFor =
+                    PaymentVerificationFailedException.class)
     public PaymentResponse verifyPayment(
             Long paymentId,
             String paymentOrderId,
@@ -193,29 +293,36 @@ public class PaymentServiceImpl implements PaymentService {
 
         Order order =
                 orderRepository.findById(
-                        payment.getOrderId()
-                ).orElseThrow(() ->
-                        new RuntimeException(
-                                "Order not found"));
+                                payment.getOrderId())
+                        .orElseThrow(() ->
+                                new RuntimeException(
+                                        "Order not found"));
 
+        // -----------------------------------------------------
         // Security check
-        if (!order.getCustomerEmail()
-                .equalsIgnoreCase(user.getEmail())) {
+        // -----------------------------------------------------
+
+        if (order.getCustomerEmail() == null ||
+                !order.getCustomerEmail()
+                        .equalsIgnoreCase(user.getEmail())) {
 
             throw new RuntimeException(
                     "You are not allowed to verify this payment");
         }
 
+        // -----------------------------------------------------
         // Already successful
+        // -----------------------------------------------------
+
         if (payment.getStatus()
                 == PaymentStatus.SUCCESS) {
 
             return mapToResponse(payment);
         }
 
-        // =====================================================
-        // REQUIRED VALIDATION
-        // =====================================================
+        // -----------------------------------------------------
+        // Required validation
+        // -----------------------------------------------------
 
         if (paymentOrderId == null ||
                 paymentOrderId.isBlank()) {
@@ -242,40 +349,60 @@ public class PaymentServiceImpl implements PaymentService {
         }
 
         // =====================================================
-        // MOCK VALIDATION
+        // VERIFY ORDER ID
         // =====================================================
 
-        String expectedOrderId =
-                payment.getGatewayOrderId();
-
-        String expectedPaymentId =
-                "MOCK_PAYMENT_" + payment.getId();
-
-        String expectedSignature =
-                "MOCK_SIGNATURE_" + payment.getId();
-
-        // Validate payment order ID
-        if (!expectedOrderId.equals(paymentOrderId)) {
+        if (payment.getGatewayOrderId() == null ||
+                !payment.getGatewayOrderId()
+                        .equals(paymentOrderId)) {
 
             failPayment(
                     payment,
-                    "Invalid payment order ID");
+                    "Invalid Razorpay order ID");
         }
 
-        // Validate payment reference
-        if (!expectedPaymentId.equals(paymentReference)) {
+        // =====================================================
+        // VERIFY RAZORPAY SIGNATURE
+        // =====================================================
+
+        try {
+
+            JSONObject options =
+                    new JSONObject();
+
+            options.put(
+                    "razorpay_order_id",
+                    paymentOrderId);
+
+            options.put(
+                    "razorpay_payment_id",
+                    paymentReference);
+
+            options.put(
+                    "razorpay_signature",
+                    signature);
+
+            boolean valid =
+                    Utils.verifyPaymentSignature(
+                            options,
+                            razorpayKeySecret);
+
+            if (!valid) {
+
+                failPayment(
+                        payment,
+                        "Razorpay payment signature verification failed");
+            }
+
+        } catch (PaymentVerificationFailedException exception) {
+
+            throw exception;
+
+        } catch (Exception exception) {
 
             failPayment(
                     payment,
-                    "Invalid payment reference");
-        }
-
-        // Validate signature
-        if (!expectedSignature.equals(signature)) {
-
-            failPayment(
-                    payment,
-                    "Payment verification failed");
+                    "Razorpay signature verification failed");
         }
 
         // =====================================================
@@ -317,11 +444,13 @@ public class PaymentServiceImpl implements PaymentService {
             Payment payment,
             String message) {
 
-        payment.setStatus(PaymentStatus.FAILED);
+        payment.setStatus(
+                PaymentStatus.FAILED);
 
         paymentRepository.saveAndFlush(payment);
 
-        throw new PaymentVerificationFailedException(message);
+        throw new PaymentVerificationFailedException(
+                message);
     }
 
     // =========================================================
@@ -361,7 +490,7 @@ public class PaymentServiceImpl implements PaymentService {
                     "Invalid payment status: " + status);
         }
 
-        // SUCCESS must come through verification
+        // SUCCESS must come through Razorpay verification
         if (newStatus == PaymentStatus.SUCCESS) {
 
             throw new RuntimeException(
@@ -378,10 +507,10 @@ public class PaymentServiceImpl implements PaymentService {
 
         Order order =
                 orderRepository.findById(
-                        payment.getOrderId()
-                ).orElseThrow(() ->
-                        new RuntimeException(
-                                "Order not found for payment"));
+                                payment.getOrderId())
+                        .orElseThrow(() ->
+                                new RuntimeException(
+                                        "Order not found for payment"));
 
         // =====================================================
         // REFUND
@@ -445,18 +574,25 @@ public class PaymentServiceImpl implements PaymentService {
     private PaymentResponse mapToResponse(
             Payment payment) {
 
-        return new PaymentResponse(
-                payment.getId(),
-                payment.getOrderId(),
-                payment.getAmount(),
-                payment.getCurrency(),
-                payment.getStatus(),
-                payment.getGateway(),
-                payment.getGatewayOrderId(),
-                payment.getGatewayPaymentId(),
-                payment.getCreatedAt(),
-                payment.getUpdatedAt()
-        );
+        PaymentResponse response =
+                new PaymentResponse(
+                        payment.getId(),
+                        payment.getOrderId(),
+                        payment.getAmount(),
+                        payment.getCurrency(),
+                        payment.getStatus(),
+                        payment.getGateway(),
+                        payment.getGatewayOrderId(),
+                        payment.getGatewayPaymentId(),
+                        null,
+                        payment.getCreatedAt(),
+                        payment.getUpdatedAt()
+                );
+
+        response.setRazorpayKeyId(
+                razorpayKeyId);
+
+        return response;
     }
 
     // =========================================================
