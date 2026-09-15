@@ -9,6 +9,7 @@ import com.shopstack.shopstack_backend.dto.response.PaymentResponse;
 import com.shopstack.shopstack_backend.entity.Order;
 import com.shopstack.shopstack_backend.entity.Payment;
 import com.shopstack.shopstack_backend.entity.User;
+import com.shopstack.shopstack_backend.notification.EmailNotificationService;
 import com.shopstack.shopstack_backend.repository.OrderRepository;
 import com.shopstack.shopstack_backend.repository.PaymentRepository;
 import com.shopstack.shopstack_backend.repository.UserRepository;
@@ -28,6 +29,7 @@ public class PaymentServiceImpl implements PaymentService {
     private final PaymentRepository paymentRepository;
     private final OrderRepository orderRepository;
     private final UserRepository userRepository;
+    private final EmailNotificationService emailNotificationService;
 
     @Value("${razorpay.key.id}")
     private String razorpayKeyId;
@@ -38,11 +40,13 @@ public class PaymentServiceImpl implements PaymentService {
     public PaymentServiceImpl(
             PaymentRepository paymentRepository,
             OrderRepository orderRepository,
-            UserRepository userRepository) {
+            UserRepository userRepository,
+            EmailNotificationService emailNotificationService) {
 
         this.paymentRepository = paymentRepository;
         this.orderRepository = orderRepository;
         this.userRepository = userRepository;
+        this.emailNotificationService = emailNotificationService;
     }
 
     // =========================================================
@@ -433,6 +437,15 @@ public class PaymentServiceImpl implements PaymentService {
             orderRepository.save(order);
         }
 
+        // =====================================================
+        // PAYMENT SUCCESS EMAIL
+        // =====================================================
+
+        sendPaymentSuccessEmail(
+                order,
+                savedPayment
+        );
+
         return mapToResponse(savedPayment);
     }
 
@@ -447,10 +460,142 @@ public class PaymentServiceImpl implements PaymentService {
         payment.setStatus(
                 PaymentStatus.FAILED);
 
-        paymentRepository.saveAndFlush(payment);
+        Payment failedPayment =
+                paymentRepository.saveAndFlush(payment);
+
+        // =====================================================
+        // PAYMENT FAILED EMAIL
+        // =====================================================
+
+        Order order =
+                orderRepository.findById(
+                                payment.getOrderId())
+                        .orElse(null);
+
+        if (order != null) {
+
+            sendPaymentFailedEmail(
+                    order,
+                    failedPayment,
+                    message
+            );
+        }
 
         throw new PaymentVerificationFailedException(
                 message);
+    }
+
+    // =========================================================
+    // PAYMENT SUCCESS EMAIL
+    // =========================================================
+
+    private void sendPaymentSuccessEmail(
+            Order order,
+            Payment payment) {
+
+        if (order.getCustomerEmail() == null ||
+                order.getCustomerEmail().isBlank()) {
+
+            return;
+        }
+
+        StringBuilder body =
+                new StringBuilder();
+
+        body.append("Hello,\n\n");
+
+        body.append(
+                "Your ShopStack payment was completed successfully.\n\n"
+        );
+
+        body.append("Payment Details\n");
+        body.append("------------------------------\n");
+
+        body.append("Order ID: ")
+                .append(order.getId())
+                .append("\n");
+
+        body.append("Payment ID: ")
+                .append(payment.getGatewayPaymentId())
+                .append("\n");
+
+        body.append("Amount: ₹")
+                .append(payment.getAmount())
+                .append("\n");
+
+        body.append("Payment Status: ")
+                .append(payment.getStatus())
+                .append("\n");
+
+        body.append("\nThank you for shopping with ShopStack.\n");
+
+        emailNotificationService.sendEmail(
+                order.getCustomerEmail(),
+                "ShopStack - Payment Successful",
+                body.toString()
+        );
+    }
+
+    // =========================================================
+    // PAYMENT FAILED EMAIL
+    // =========================================================
+
+    private void sendPaymentFailedEmail(
+            Order order,
+            Payment payment,
+            String reason) {
+
+        if (order.getCustomerEmail() == null ||
+                order.getCustomerEmail().isBlank()) {
+
+            return;
+        }
+
+        StringBuilder body =
+                new StringBuilder();
+
+        body.append("Hello,\n\n");
+
+        body.append(
+                "Unfortunately, your ShopStack payment could not be completed.\n\n"
+        );
+
+        body.append("Payment Details\n");
+        body.append("------------------------------\n");
+
+        body.append("Order ID: ")
+                .append(order.getId())
+                .append("\n");
+
+        body.append("Amount: ₹")
+                .append(payment.getAmount())
+                .append("\n");
+
+        body.append("Payment Status: ")
+                .append(payment.getStatus())
+                .append("\n");
+
+        if (reason != null &&
+                !reason.isBlank()) {
+
+            body.append("Reason: ")
+                    .append(reason)
+                    .append("\n");
+        }
+
+        body.append(
+                "\nPlease try the payment again.\n"
+        );
+
+        body.append(
+                "\nThank you for shopping with ShopStack.\n"
+        );
+
+        emailNotificationService.sendEmail(
+                order.getCustomerEmail(),
+                "ShopStack - Payment Failed",
+                body.toString()
+        );
     }
 
     // =========================================================

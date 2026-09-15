@@ -1,6 +1,7 @@
 package com.shopstack.shopstack_backend.service.impl;
 
 import com.shopstack.shopstack_backend.constant.OrderStatus;
+import com.shopstack.shopstack_backend.notification.EmailNotificationService;
 import com.shopstack.shopstack_backend.dto.request.OrderRequest;
 import com.shopstack.shopstack_backend.dto.response.OrderItemResponse;
 import com.shopstack.shopstack_backend.dto.response.OrderResponse;
@@ -40,6 +41,7 @@ public class OrderServiceImpl implements OrderService {
     private final InventoryHistoryRepository inventoryHistoryRepository;
     private final CouponRepository couponRepository;
     private final WarehouseRepository warehouseRepository;
+    private final EmailNotificationService emailNotificationService;
 
     public OrderServiceImpl(
             OrderRepository orderRepository,
@@ -48,7 +50,8 @@ public class OrderServiceImpl implements OrderService {
             UserRepository userRepository,
             InventoryHistoryRepository inventoryHistoryRepository,
             CouponRepository couponRepository,
-            WarehouseRepository warehouseRepository) {
+            WarehouseRepository warehouseRepository,
+            EmailNotificationService emailNotificationService) {
 
         this.orderRepository = orderRepository;
         this.productRepository = productRepository;
@@ -58,6 +61,7 @@ public class OrderServiceImpl implements OrderService {
                 inventoryHistoryRepository;
         this.couponRepository = couponRepository;
         this.warehouseRepository = warehouseRepository;
+        this.emailNotificationService = emailNotificationService;
     }
 
     // =========================
@@ -394,9 +398,54 @@ public class OrderServiceImpl implements OrderService {
 
         cart.getItems().clear();
 
-        cartRepository.save(cart);
+cartRepository.save(cart);
 
-        return mapToResponse(savedOrder);
+// Send Order Placed notification
+StringBuilder emailBody = new StringBuilder();
+
+emailBody.append("Hello ")
+        .append(savedOrder.getCustomerName())
+        .append(",\n\n");
+
+emailBody.append("Your ShopStack order has been placed successfully.\n\n");
+
+emailBody.append("Order ID: ")
+        .append(savedOrder.getId())
+        .append("\n");
+
+emailBody.append("Order Date: ")
+        .append(savedOrder.getCreatedAt())
+        .append("\n");
+
+emailBody.append("Status: ")
+        .append(savedOrder.getStatus())
+        .append("\n");
+
+emailBody.append("Total Amount: ₹")
+        .append(savedOrder.getTotalAmount())
+        .append("\n\n");
+
+emailBody.append("Products:\n");
+
+savedOrder.getItems().forEach(item -> {
+    emailBody.append("- ")
+            .append(item.getProductName())
+            .append(" | Quantity: ")
+            .append(item.getQuantity())
+            .append(" | Subtotal: ₹")
+            .append(item.getSubtotal())
+            .append("\n");
+});
+
+emailBody.append("\nThank you for shopping with ShopStack!\n");
+
+emailNotificationService.sendEmail(
+        savedOrder.getCustomerEmail(),
+        "ShopStack - Order Placed Successfully",
+        emailBody.toString()
+);
+
+return mapToResponse(savedOrder);
     }
 
     // =========================

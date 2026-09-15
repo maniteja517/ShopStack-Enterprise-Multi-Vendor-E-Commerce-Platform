@@ -5,6 +5,7 @@ import com.shopstack.shopstack_backend.dto.request.RefundRequest;
 import com.shopstack.shopstack_backend.dto.response.RefundResponse;
 import com.shopstack.shopstack_backend.entity.Order;
 import com.shopstack.shopstack_backend.entity.Refund;
+import com.shopstack.shopstack_backend.notification.EmailNotificationService;
 import com.shopstack.shopstack_backend.repository.OrderRepository;
 import com.shopstack.shopstack_backend.repository.RefundRepository;
 import com.shopstack.shopstack_backend.service.RefundService;
@@ -15,18 +16,20 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 @Service
-public class RefundServiceImpl
-        implements RefundService {
+public class RefundServiceImpl implements RefundService {
 
     private final RefundRepository refundRepository;
     private final OrderRepository orderRepository;
+    private final EmailNotificationService emailNotificationService;
 
     public RefundServiceImpl(
             RefundRepository refundRepository,
-            OrderRepository orderRepository) {
+            OrderRepository orderRepository,
+            EmailNotificationService emailNotificationService) {
 
         this.refundRepository = refundRepository;
         this.orderRepository = orderRepository;
+        this.emailNotificationService = emailNotificationService;
     }
 
     // =========================
@@ -73,8 +76,7 @@ public class RefundServiceImpl
         // CREATE REFUND
         // =========================
 
-        Refund refund =
-                new Refund();
+        Refund refund = new Refund();
 
         refund.setOrder(order);
 
@@ -107,8 +109,79 @@ public class RefundServiceImpl
 
         orderRepository.save(order);
 
-        return convertToResponse(
-                savedRefund
+        // =========================
+        // REFUND COMPLETED EMAIL
+        // =========================
+
+        sendRefundEmail(savedRefund);
+
+        return convertToResponse(savedRefund);
+    }
+
+    // =========================
+    // SEND REFUND EMAIL
+    // =========================
+
+    private void sendRefundEmail(
+            Refund refund) {
+
+        Order order = refund.getOrder();
+
+        if (order == null ||
+                order.getCustomerEmail() == null ||
+                order.getCustomerEmail().isBlank()) {
+
+            return;
+        }
+
+        StringBuilder body =
+                new StringBuilder();
+
+        body.append("Hello,\n\n");
+
+        body.append(
+                "Your ShopStack refund has been completed successfully.\n\n"
+        );
+
+        body.append("Refund Details\n");
+        body.append("------------------------------\n");
+
+        body.append("Order ID: ")
+                .append(order.getId())
+                .append("\n");
+
+        body.append("Refund Amount: ₹")
+                .append(refund.getRefundAmount())
+                .append("\n");
+
+        body.append("Refund Status: ")
+                .append(refund.getStatus())
+                .append("\n");
+
+        body.append("Refund Date: ")
+                .append(refund.getRefundedAt())
+                .append("\n");
+
+        if (refund.getReason() != null &&
+                !refund.getReason().isBlank()) {
+
+            body.append("Reason: ")
+                    .append(refund.getReason())
+                    .append("\n");
+        }
+
+        body.append(
+                "\nThe refund has been processed for your order.\n"
+        );
+
+        body.append(
+                "\nThank you for shopping with ShopStack.\n"
+        );
+
+        emailNotificationService.sendEmail(
+                order.getCustomerEmail(),
+                "ShopStack - Refund Completed",
+                body.toString()
         );
     }
 
@@ -118,8 +191,7 @@ public class RefundServiceImpl
 
     @Override
     @Transactional(readOnly = true)
-    public RefundResponse getRefundById(
-            Long id) {
+    public RefundResponse getRefundById(Long id) {
 
         Refund refund =
                 refundRepository.findById(id)

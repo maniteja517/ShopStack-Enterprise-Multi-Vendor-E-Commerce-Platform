@@ -6,6 +6,7 @@ import com.shopstack.shopstack_backend.dto.response.ShipmentResponse;
 import com.shopstack.shopstack_backend.entity.Order;
 import com.shopstack.shopstack_backend.entity.Shipment;
 import com.shopstack.shopstack_backend.entity.Warehouse;
+import com.shopstack.shopstack_backend.notification.EmailNotificationService;
 import com.shopstack.shopstack_backend.repository.OrderRepository;
 import com.shopstack.shopstack_backend.repository.ShipmentRepository;
 import com.shopstack.shopstack_backend.service.ShipmentService;
@@ -22,16 +23,21 @@ public class ShipmentServiceImpl
 
     private final ShipmentRepository shipmentRepository;
     private final OrderRepository orderRepository;
+    private final EmailNotificationService emailNotificationService;
 
     public ShipmentServiceImpl(
             ShipmentRepository shipmentRepository,
-            OrderRepository orderRepository) {
+            OrderRepository orderRepository,
+            EmailNotificationService emailNotificationService) {
 
         this.shipmentRepository =
                 shipmentRepository;
 
         this.orderRepository =
                 orderRepository;
+
+        this.emailNotificationService =
+                emailNotificationService;
     }
 
     // =========================
@@ -152,8 +158,8 @@ public class ShipmentServiceImpl
 
     @Override
     @Transactional(readOnly = true)
-    public ShipmentResponse
-    getShipmentByOrderId(Long orderId) {
+    public ShipmentResponse getShipmentByOrderId(
+            Long orderId) {
 
         Order order =
                 orderRepository.findById(orderId)
@@ -272,10 +278,10 @@ public class ShipmentServiceImpl
         // UPDATE ORDER STATUS
         // =========================
 
-        if (newStatus.equals("DELIVERED")) {
+        Order order =
+                shipment.getOrder();
 
-            Order order =
-                    shipment.getOrder();
+        if (newStatus.equals("DELIVERED")) {
 
             if (order != null) {
 
@@ -289,8 +295,129 @@ public class ShipmentServiceImpl
             }
         }
 
+        // =========================
+        // ORDER SHIPPED EMAIL
+        // =========================
+
+        if (newStatus.equals("SHIPPED")) {
+
+            sendShipmentEmail(
+                    updatedShipment,
+                    "SHIPPED"
+            );
+        }
+
+        // =========================
+        // ORDER DELIVERED EMAIL
+        // =========================
+
+        if (newStatus.equals("DELIVERED")) {
+
+            sendShipmentEmail(
+                    updatedShipment,
+                    "DELIVERED"
+            );
+        }
+
         return convertToResponse(
                 updatedShipment
+        );
+    }
+
+    // =========================
+    // SEND SHIPMENT EMAIL
+    // =========================
+
+    private void sendShipmentEmail(
+            Shipment shipment,
+            String status) {
+
+        Order order =
+                shipment.getOrder();
+
+        if (order == null ||
+                order.getCustomerEmail() == null ||
+                order.getCustomerEmail().isBlank()) {
+
+            return;
+        }
+
+        String subject;
+
+        if (status.equals("SHIPPED")) {
+
+            subject =
+                    "ShopStack - Your Order Has Been Shipped";
+
+        } else {
+
+            subject =
+                    "ShopStack - Your Order Has Been Delivered";
+        }
+
+        StringBuilder body =
+                new StringBuilder();
+
+        body.append("Hello,\n\n");
+
+        if (status.equals("SHIPPED")) {
+
+            body.append(
+                    "Your ShopStack order has been shipped successfully.\n\n"
+            );
+
+        } else {
+
+            body.append(
+                    "Your ShopStack order has been delivered successfully.\n\n"
+            );
+        }
+
+        body.append("Order Details\n");
+        body.append("------------------------------\n");
+
+        body.append("Order ID: ")
+                .append(order.getId())
+                .append("\n");
+
+        body.append("Tracking Number: ")
+                .append(shipment.getTrackingNumber())
+                .append("\n");
+
+        body.append("Courier: ")
+                .append(
+                        shipment.getCourierName() != null
+                                ? shipment.getCourierName()
+                                : "Not specified"
+                )
+                .append("\n");
+
+        body.append("Shipment Status: ")
+                .append(status)
+                .append("\n");
+
+        if (shipment.getShippedAt() != null) {
+
+            body.append("Shipped At: ")
+                    .append(shipment.getShippedAt())
+                    .append("\n");
+        }
+
+        if (shipment.getDeliveredAt() != null) {
+
+            body.append("Delivered At: ")
+                    .append(shipment.getDeliveredAt())
+                    .append("\n");
+        }
+
+        body.append(
+                "\nThank you for shopping with ShopStack.\n"
+        );
+
+        emailNotificationService.sendEmail(
+                order.getCustomerEmail(),
+                subject,
+                body.toString()
         );
     }
 
